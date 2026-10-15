@@ -1,0 +1,143 @@
+services:
+  # ==================== MySQL ====================
+  mysql:
+    container_name: agentpm-mysql
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      TZ: "Asia/Shanghai"
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}"
+      MYSQL_DATABASE: "${MYSQL_DATABASE:-agentpm}"
+      MYSQL_USER: "${MYSQL_USER:-agentpm}"
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD}"
+    # 不对公网暴露端口，仅容器内网互通（如需本机调试可临时加 ports）
+    expose:
+      - "3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - agentpm
+    healthcheck:
+      # 用 MYSQL_PWD 环境变量传密码，避免密码出现在容器进程列表（$$ 是 compose 对 $ 的转义）
+      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_ROOT_PASSWORD mysqladmin ping -h localhost -u root"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  # ==================== Redis ====================
+  redis:
+    container_name: agentpm-redis
+    image: redis:7-alpine
+    restart: unless-stopped
+    environment:
+      TZ: "Asia/Shanghai"
+    expose:
+      - "6379"
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD}
+      --appendonly yes
+      --appendfsync everysec
+    networks:
+      - agentpm
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+  # ==================== Backend ====================
+  # 两种方式共用：docker compose pull → 拉 image 现成镜像；docker compose up -d --build → 用本地源码构建（不联网、不碰 GHCR）
+  backend:
+    container_name: agentpm-backend
+    image: ghcr.io/${IMAGE_OWNER:-fangjinbao}/agentpm-server:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/server.Dockerfile
+    restart: unless-stopped
+    environment:
+      TZ: "Asia/Shanghai"
+      NODE_ENV: "production"
+      SERVER_PORT: "9001"
+      DATABASE_URL: "mysql://${MYSQL_USER:-agentpm}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-agentpm}?charset=utf8mb4"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
+      REDIS_DB: "0"
+      JWT_SECRET: "${JWT_SECRET}"
+      JWT_ACCESS_EXPIRE: "7200"
+      JWT_REFRESH_EXPIRE: "1296000"
+    expose:
+      - "9001"
+    volumes:
+      - backend_uploads:/app/uploads
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - agentpm
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9001/admin/open/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1.0"
+
+  # ==================== 前端网关（单容器托管所有前端）====================
+  # 一次构建 docker/frontends.json 里所有前端，按子域名（server_name）分流。
+  # 新增前端：frontends.json 加一行 + 下面 environment 加一个 <NAME>_DOMAIN 即可，无需加服务。
+  gateway:
+    container_name: agentpm-gateway
+    image: ghcr.io/${IMAGE_OWNER:-fangjinbao}/agentpm-gateway:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/gateway.Dockerfile
+    restart: unless-stopped
+    environment:
+      TZ: "Asia/Shanghai"
+    ports:
+      # 按端口分流：每个前端一个端口，仅绑本机回环（给宝塔反代用，不对公网暴露）。
+      # 端口与 docker/frontends.json 里各前端的 port 一一对应。
+      # 宝塔为每个子域名建站，反代到对应端口即可（admin.xxx → 8080，m.xxx → 8081）。
+      - "127.0.0.1:8080:8080"   # admin 管理后台
+      - "127.0.0.1:8081:8081"   # mobile 移动端 H5
+    depends_on:
+      backend:
+        # 等后端健康（含 prisma 迁移完成）再起网关，避免首次部署反代到未就绪后端导致 502
+        condition: service_healthy
+    networks:
+      - agentpm
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
+  backend_uploads:
+    driver: local
+
+networks:
+  agentpm:
+    driver: bridge

@@ -1,0 +1,318 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== 基础系统模块 ====================
+
+/// 系统用户
+model SysUser {
+  id           Int      @id @default(autoincrement())
+  /// 所属部门 ID
+  departmentId Int?
+  /// 岗位 ID
+  positionId   Int?
+  /// 用户名（登录账号）
+  username     String   @unique @db.VarChar(100)
+  /// 工号
+  workId       String?  @unique @db.VarChar(30)
+  /// 密码（bcrypt 哈希，不对外返回）
+  password     String
+  /// 密码版本号（改密后旧 token 失效）
+  passwordV    Int      @default(1)
+  /// 姓名
+  name         String?
+  /// 昵称
+  nickName     String?
+  /// 头像 URL
+  headImg      String?
+  /// 手机号
+  phone        String?  @db.VarChar(20)
+  /// 邮箱
+  email        String?
+  /// 备注
+  remark       String?
+  /// 状态 1=启用 0=禁用
+  status       Int      @default(1)
+  /// 在线 socket 连接 ID（内部用，不对外返回）
+  socketId     String?
+  /// 租户 ID
+  tenantId     Int?
+  /// 创建时间
+  createTime   DateTime @default(now())
+  /// 更新时间
+  updateTime   DateTime @updatedAt
+
+  department SysDepartment? @relation(fields: [departmentId], references: [id])
+  position   SysPosition?   @relation(fields: [positionId], references: [id])
+  userRoles  SysUserRole[]
+
+  @@index([departmentId])
+  @@index([positionId])
+  @@index([phone])
+  @@index([tenantId])
+  @@map("base_sys_user")
+}
+
+/// 系统角色
+model SysRole {
+  id         Int      @id @default(autoincrement())
+  /// 角色名称
+  name       String
+  /// 角色标识（唯一）
+  label      String?  @unique
+  /// 备注
+  remark     String?
+  /// 数据权限范围标记
+  relevance  Int      @default(1)
+  /// 状态 1=启用 0=禁用
+  status     Int      @default(1)
+  /// 租户 ID
+  tenantId   Int?
+  /// 创建时间
+  createTime DateTime @default(now())
+  /// 更新时间
+  updateTime DateTime @updatedAt
+
+  userRoles       SysUserRole[]
+  roleMenus       SysRoleMenu[]
+  roleDepartments SysRoleDepartment[]
+
+  @@index([tenantId])
+  @@map("base_sys_role")
+}
+
+/// 系统菜单
+model SysMenu {
+  id         Int      @id @default(autoincrement())
+  /// 父级菜单 ID
+  parentId   Int?
+  /// 菜单名称
+  name       String
+  /// 前端路由路径
+  router     String?
+  /// 权限标识
+  perms      String?
+  /// 类型 0=目录 1=菜单 2=按钮
+  type       Int      @default(0)
+  /// 图标
+  icon       String?
+  /// 排序号
+  orderNum   Int      @default(0)
+  /// 视图组件路径
+  viewPath   String?
+  /// 是否缓存 1=是 0=否
+  keepAlive  Int      @default(1)
+  /// 是否显示 1=是 0=否
+  isShow     Int      @default(1)
+  /// 租户 ID
+  tenantId   Int?
+  /// 创建时间
+  createTime DateTime @default(now())
+  /// 更新时间
+  updateTime DateTime @updatedAt
+
+  roleMenus SysRoleMenu[]
+
+  @@index([parentId])
+  @@index([tenantId])
+  @@map("base_sys_menu")
+}
+
+/// 系统部门
+model SysDepartment {
+  id         Int      @id @default(autoincrement())
+  /// 部门名称
+  name       String
+  /// 父级部门 ID
+  parentId   Int?
+  /// 部门类型
+  type       String?  @db.VarChar(20)
+  /// 负责人
+  leader     String?  @db.VarChar(50)
+  /// 联系电话
+  phone      String?  @db.VarChar(20)
+  /// 排序号
+  orderNum   Int      @default(0)
+  /// 状态 1=启用 0=禁用
+  status     Int      @default(1)
+  /// 租户 ID
+  tenantId   Int?
+  /// 创建时间
+  createTime DateTime @default(now())
+  /// 更新时间
+  updateTime DateTime @updatedAt
+
+  users           SysUser[]
+  roleDepartments SysRoleDepartment[]
+
+  @@index([parentId])
+  @@index([tenantId])
+  @@map("base_sys_department")
+}
+
+/// 用户-角色关联
+model SysUserRole {
+  id     Int @id @default(autoincrement())
+  /// 用户 ID
+  userId Int
+  /// 角色 ID
+  roleId Int
+
+  user SysUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role SysRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@map("base_sys_user_role")
+}
+
+/// 角色-菜单关联
+model SysRoleMenu {
+  id     Int @id @default(autoincrement())
+  /// 角色 ID
+  roleId Int
+  /// 菜单 ID
+  menuId Int
+
+  role SysRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  menu SysMenu @relation(fields: [menuId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, menuId])
+  @@map("base_sys_role_menu")
+}
+
+/// 角色-部门关联（数据权限）
+model SysRoleDepartment {
+  id           Int @id @default(autoincrement())
+  /// 角色 ID
+  roleId       Int
+  /// 部门 ID
+  departmentId Int
+
+  role       SysRole       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  department SysDepartment @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, departmentId])
+  @@map("base_sys_role_department")
+}
+
+/// 系统操作日志
+model SysLog {
+  id         Int      @id @default(autoincrement())
+  /// 操作用户 ID
+  userId     Int?
+  /// 操作动作
+  action     String?
+  /// 请求 IP
+  ip         String?  @db.VarChar(50)
+  /// IP 归属地
+  ipAddr     String?
+  /// 请求参数
+  params     String?  @db.Text
+  /// 租户 ID
+  tenantId   Int?
+  /// 创建时间
+  createTime DateTime @default(now())
+  /// 更新时间
+  updateTime DateTime @updatedAt
+
+  @@index([userId])
+  @@index([tenantId])
+  @@map("base_sys_log")
+}
+
+/// 系统岗位
+model SysPosition {
+  id          Int      @id @default(autoincrement())
+  /// 岗位名称
+  name        String   @unique @db.VarChar(50)
+  /// 岗位描述
+  description String?  @db.VarChar(200)
+  /// 排序号（升序）
+  orderNum    Int      @default(0)
+  /// 状态 1=启用 0=禁用
+  status      Int      @default(1)
+  /// 租户 ID
+  tenantId    Int?
+  /// 创建时间
+  createTime  DateTime @default(now())
+  /// 更新时间
+  updateTime  DateTime @updatedAt
+
+  users SysUser[]
+
+  @@index([tenantId])
+  @@map("base_sys_position")
+}
+
+/// 系统参数（键值对配置）
+model SysParam {
+  id         Int      @id @default(autoincrement())
+  /// 参数键（唯一）
+  keyName    String   @unique
+  /// 参数名称
+  name       String
+  /// 参数值
+  data       String?  @db.Text
+  /// 备注
+  remark     String?
+  /// 租户 ID
+  tenantId   Int?
+  /// 创建时间
+  createTime DateTime @default(now())
+  /// 更新时间
+  updateTime DateTime @updatedAt
+
+  @@index([tenantId])
+  @@map("base_sys_param")
+}
+
+// ==================== 字典模块 ====================
+
+// ==================== 任务模块 ====================
+
+// ==================== 文件模块 ====================
+
+// ==================== 插件模块 ====================
+
+// ==================== 回收站模块 ====================
+
+// ==================== 系统配置 - 业务基础数据 ====================
+
+// ==================== 系统管理模块 ====================
+
+/// 系统操作日志（仅查看，记录操作人行为审计）
+model SysOperationLog {
+  id          Int      @id @default(autoincrement())
+  /// 操作人姓名
+  operator    String   @db.VarChar(50)
+  /// 操作类型：新增/编辑/删除/登录/其他
+  type        String   @db.VarChar(20)
+  /// 操作对象（如"题目管理"）
+  target      String   @db.VarChar(100)
+  /// 操作内容描述
+  content     String   @db.VarChar(500)
+  /// 来源网络地址
+  sourceIp    String   @db.VarChar(50)
+  /// 操作时间
+  operateTime DateTime @default(now())
+  /// 租户 ID
+  tenantId    Int?
+  /// 创建时间
+  createTime  DateTime @default(now())
+  /// 更新时间
+  updateTime  DateTime @updatedAt
+
+  @@index([operator])
+  @@index([type])
+  @@index([operateTime])
+  @@index([tenantId])
+  @@map("sys_operation_log")
+}
+
+// ==================== 考试域模块 ====================
+
